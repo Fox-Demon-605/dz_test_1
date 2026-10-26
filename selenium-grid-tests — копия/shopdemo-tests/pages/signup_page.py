@@ -1,28 +1,14 @@
 import allure
-from selenium.webdriver.common.by import By
+from playwright.sync_api import expect
 
 from .base_page import BasePage
 
 
 class SignupPage(BasePage):
-    HEADING = (By.CSS_SELECTOR, '[data-testid="signup-heading"]')
-    NAME = (By.CSS_SELECTOR, '[data-testid="signup-name"]')
-    EMAIL = (By.CSS_SELECTOR, '[data-testid="signup-email"]')
-    PASSWORD = (By.CSS_SELECTOR, '[data-testid="signup-password"]')
-    CONFIRM_PASSWORD = (
-        By.CSS_SELECTOR,
-        '[data-testid="signup-confirm-password"]',
-    )
-    SUBMIT = (By.CSS_SELECTOR, '[data-testid="signup-submit-button"]')
-    PASSWORD_ERROR = (
-        By.CSS_SELECTOR,
-        '[data-testid="field-error-signup-confirm-password"]',
-    )
-
     @allure.step("Проверить страницу регистрации")
     def should_be_open(self):
         self.wait_for_path("/signup")
-        self.visible(self.HEADING)
+        self.visible(self.locator("signup-heading"))
         return self
 
     @allure.step("Зарегистрировать пользователя {name}")
@@ -30,7 +16,7 @@ class SignupPage(BasePage):
         from .main_page import MainPage
 
         self._fill_form(name, email, password, password)
-        self.click(self.SUBMIT)
+        self.clickable(self.locator("signup-submit-button"))
         return MainPage(self.driver, self.base_url).should_be_open()
 
     @allure.step("Попытаться зарегистрироваться с разными паролями")
@@ -38,16 +24,21 @@ class SignupPage(BasePage):
         self, name, email, password, confirmation
     ):
         self._fill_form(name, email, password, confirmation)
-        self.click(self.SUBMIT)
+        self.clickable(self.locator("signup-submit-button"))
         return self
 
     @allure.step("Проверить ошибку подтверждения пароля")
     def should_show_password_mismatch(self):
-        assert "Passwords do not match" in self.text(self.PASSWORD_ERROR)
+        expect(
+            self.locator("field-error-signup-confirm-password")
+        ).to_contain_text("Passwords do not match")
         return self
 
     def _fill_form(self, name, email, password, confirmation):
-        self.fill(self.NAME, name)
-        self.fill(self.EMAIL, email)
-        self.fill(self.PASSWORD, password)
-        self.fill(self.CONFIRM_PASSWORD, confirmation)
+        self.fill(self.locator("signup-name"), name)
+        self.fill(self.locator("signup-email"), email)
+        self.fill(self.locator("signup-password"), password)
+        self.fill(
+            self.locator("signup-confirm-password"),
+            confirmation,
+        )

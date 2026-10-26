@@ -3,90 +3,73 @@ import logging
 
 import allure
 import pytest
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
+
 
 LOGGER = logging.getLogger(__name__)
 
 
-def pytest_addoption(parser):
-    parser.addoption(
-        "--base-url",
-        action="store",
-        default="http://localhost:3000",
-        help="URL ShopDemo, видимый браузеру Selenium Grid",
-    )
-    parser.addoption(
-        "--grid-url",
-        action="store",
-        default="http://localhost:4444",
-        help="Адрес Selenium Grid",
-    )
-    parser.addoption(
-        "--browser",
-        action="store",
-        default="chrome",
-        choices=("chrome", "firefox"),
-        help="Браузер для тестов",
-    )
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args):
+    return {
+        **browser_context_args,
+        "viewport": {"width": 1440, "height": 1000},
+    }
 
 
 @pytest.fixture
-def base_url(request):
-    return request.config.getoption("--base-url").rstrip("/")
+def driver(request, page):
+    console_messages = []
+    page_errors = []
+    network_events = []
 
-
-@pytest.fixture
-def grid_url(request):
-    return request.config.getoption("--grid-url").rstrip("/")
-
-
-@pytest.fixture
-def driver(request, base_url, grid_url):
-    browser = request.config.getoption("--browser")
-
-    if browser == "chrome":
-        options = ChromeOptions()
-        options.set_capability(
-            "goog:loggingPrefs",
-            {"browser": "ALL", "performance": "ALL"},
-        )
-    else:
-        options = FirefoxOptions()
-
-    options.add_argument("--width=1440")
-    options.add_argument("--height=1000")
-
-    web_driver = webdriver.Remote(
-        command_executor=grid_url,
-        options=options,
+    page.on(
+        "console",
+        lambda message: console_messages.append(
+            {"type": message.type, "text": message.text}
+        ),
     )
-    web_driver.implicitly_wait(0)
+    page.on(
+        "pageerror",
+        lambda error: page_errors.append(str(error)),
+    )
+    page.on(
+        "request",
+        lambda req: network_events.append(
+            {
+                "event": "request",
+                "method": req.method,
+                "url": req.url,
+            }
+        ),
+    )
+    page.on(
+        "response",
+        lambda response: network_events.append(
+            {
+                "event": "response",
+                "status": response.status,
+                "url": response.url,
+            }
+        ),
+    )
 
-    request.node._web_driver = web_driver
+    request.node._playwright_page = page
+    request.node._console_messages = console_messages
+    request.node._page_errors = page_errors
+    request.node._network_events = network_events
 
+    return page
+
+
+def _attach_json(data, name):
     try:
-        yield web_driver
-    finally:
-        web_driver.quit()
-
-
-def _attach_logs(driver, log_type, attachment_name):
-    try:
-        available_types = driver.log_types
-        if log_type not in available_types:
-            LOGGER.info("Тип логов %s недоступен в этой сессии", log_type)
-            return
-
-        entries = driver.get_log(log_type)
         allure.attach(
-            json.dumps(entries, ensure_ascii=False, indent=2),
-            name=attachment_name,
+            json.dumps(data, ensure_ascii=False, indent=2),
+            name=name,
             attachment_type=allure.attachment_type.JSON,
         )
     except Exception:
-        LOGGER.exception("Не удалось получить логи %s", log_type)
+        LOGGER.exception("Не удалось прикрепить %s", name)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -97,24 +80,28 @@ def pytest_runtest_makereport(item, call):
     if report.when != "call" or not report.failed:
         return
 
-    driver = getattr(item, "_web_driver", None)
-    if driver is None:
+    page = getattr(item, "_playwright_page", None)
+    if page is None:
         return
 
     try:
         allure.attach(
-            driver.get_screenshot_as_png(),
+            page.screenshot(full_page=True),
             name="Скриншот при падении",
             attachment_type=allure.attachment_type.PNG,
         )
     except Exception:
         LOGGER.exception("Не удалось снять скриншот")
 
-    _attach_logs(driver, "browser", "Логи браузера")
-
-    if driver.capabilities.get("browserName", "").lower() == "chrome":
-        _attach_logs(
-            driver,
-            "performance",
-            "Chrome performance logs — Network events",
-        )
+    _attach_json(
+        getattr(item, "_console_messages", []),
+        "Сообщения консоли",
+    )
+    _attach_json(
+        getattr(item, "_page_errors", []),
+        "Ошибки страницы",
+    )
+    _attach_json(
+        getattr(item, "_network_events", []),
+        "Сетевые события",
+    )
